@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,
+initial-scale=1.0">
+<title>Герои Беларуси: Математический квест</title>
+<link rel="stylesheet" href="style.css">
+<!-- Подключение библиотеки для генерации QR-кодов -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+<header class="header">
+<h1>Герои Беларуси: Математический квест</h1>
+<p>Решайте математические задачи, открывайте буквы и узнавайте о
+героях нашей страны</p>
+</header>
+<main class="container">
+<!-- Селектор выбора героя -->
+<section class="select-section">
+<label for="heroSelect"><b>Выберите модуль квеста:</b></label>
+<select id="heroSelect" onchange="loadHero()"></select>
+</section>
+<!-- Игровое поле -->
+<section class="game-card">
+<h2 id="questTitle">Зашифрованное имя</h2>
+<!-- Ячейки с буквами -->
+<div id="wordContainer" class="word-container"></div>
+<!-- Блок с задачей -->
+<div id="taskBox" class="task-box">
+<div class="task-header">
+<span id="taskStep">Задача 1</span>
+</div>
+<p id="taskQuestion" class="task-question">Загрузка
+задачи...</p>
+<div class="input-group">
+<input type="text" id="answerInput" placeholder="Введите ваш
+ответ...
+" autocomplete="off">
+<button id="submitBtn"
+onclick="checkAnswer()">Проверить</button>
+</div>
+<div class="ai-box">
+<button class="ai-btn" onclick="getAIHint()">🤖 Запросить
+ИИ-подсказку</button>
+<div id="aiHintText" class="ai-hint-text hidden"></div>
+</div>
+<p id="feedbackMsg" class="feedback-msg"></p>
+</div>
+</section>
+<!-- Финальная карточка героя (скрыта до завершения) -->
+<section id="heroCard" class="hero-card hidden">
+<div class="hero-card-content">
+<img id="heroPhoto" src="" alt="Портрет Героя"
+class="hero-photo">
+<div class="hero-info">
+<span class="badge">Герой Беларуси</span>
+<h2 id="heroName"></h2>
+<p id="heroTitle" class="hero-subtitle"></p>
+<p id="heroDesc" class="hero-desc"></p>
+<div class="qr-block">
+<div id="qrcode"></div>
+<p>Отсканируйте QR-код для изучения подробных материалов
+и документов</p>
+</div>
+</div>
+</div>
+<button class="restart-btn" onclick="restartQuest()">Пройти
+заново</button>
+</section>
+</main>
+<script src="script.js"></script>
+</body>
+</html>

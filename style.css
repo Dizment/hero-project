@@ -121,6 +121,10 @@ transition: background 0.2s;
 button:hover {
 background-color: #005230;
 }
+button:disabled {
+opacity: 0.6;
+cursor: wait;
+}
 .ai-box {
 margin-top: 1rem;
 }
@@ -162,8 +166,9 @@ flex-wrap: wrap;
 .hero-photo {
 width: 220px;
 height: 280px;
-object-fit: cover;
+object-fit: contain;
 border-radius: 10px;
+background-color: #f4f6f8;
 box-shadow: 0 4px 10px rgba(0,0,0,0.15);
 }
 .hero-info {

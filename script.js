@@ -1,9 +1,3 @@
-// Browser-side key is visible to anyone who visits the deployed site.
-const GEMINI_API_KEY = "AQ.Ab8RN6Lu8UDLXdlZdiZM-36B8mXPezwn81ADG9jwVllyj8aUcA";
-const GEMINI_API_URL =
-  "https://generativelanguage.googleapis.com/v1beta/interactions";
-const GEMINI_MODEL = "gemini-3.8-flash";
-
 const heroesData = [
   {
     id: "karvat",
@@ -197,50 +191,22 @@ async function loadHero() {
   if (hintBox) hintBox.classList.add("hidden");
 
   try {
-    if (GEMINI_API_KEY === "PASTE_YOUR_GEMINI_API_KEY_HERE") {
-      throw new Error("Добавьте API-ключ Gemini в GEMINI_API_KEY в script.js.");
-    }
-
-    const response = await fetch(GEMINI_API_URL, {
+    const response = await fetch("/api/generate-tasks", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": GEMINI_API_KEY
-      },
-      body: JSON.stringify({
-        model: GEMINI_MODEL,
-        input: `Составь ровно ${currentHero.name.length} разных математических заданий для школьника 5 класса на выполнение арифметических действий с натуральными числами. Не используй фамилии, имена, буквы алфавита или пояснения о том, какая буква откроется. Не добавляй к заданиям названия тем или метки вроде «Д — Делимость» и «Буква Д». Каждое условие должно сразу начинаться с самостоятельной математической задачи, без буквенных заголовков и подсказок, связанных с буквами. Ответ — короткое однозначное натуральное число; проверь вычисления. Для каждой задачи дай краткую наводящую подсказку, не сообщающую ответ напрямую. Верни только JSON без Markdown в формате {"tasks":[{"question":"условие","answer":"ответ","hint":"подсказка"}]}.`,
-        store: false,
-        generation_config: { thinking_level: "low" }
-      })
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ heroId: currentHero.id })
     });
     const responseBody = await response.json();
 
     if (!response.ok) {
-      const errorMessage = responseBody.error?.message || `Ошибка Gemini API (${response.status})`;
+      const errorMessage = responseBody.error || `Ошибка сервера (${response.status})`;
       throw new Error(errorMessage);
     }
 
-    const generatedText = responseBody.output_text ||
-      responseBody.output
-        ?.flatMap(step => step.content || [])
-        .filter(item => item.type === "text" || item.type === "output_text")
-        .map(item => item.text || "")
-        .join("") ||
-      responseBody.steps
-        ?.flatMap(step => step.content || [])
-        .filter(item => item.type === "text" || item.type === "output_text")
-        .map(item => item.text || "")
-        .join("");
-    if (!generatedText) {
-      throw new Error("Gemini не вернул текст заданий. Попробуйте ещё раз.");
-    }
-    const result = JSON.parse(generatedText);
-
     if (
-      !Array.isArray(result.tasks) ||
-      result.tasks.length !== currentHero.name.length ||
-      result.tasks.some(task =>
+      !Array.isArray(responseBody.tasks) ||
+      responseBody.tasks.length !== currentHero.name.length ||
+      responseBody.tasks.some(task =>
         !task ||
         typeof task.question !== "string" ||
         typeof task.answer !== "string" ||
@@ -250,12 +216,12 @@ async function loadHero() {
       throw new Error("Gemini вернул задания в неверном формате. Попробуйте выбрать героя ещё раз.");
     }
 
-    if (result.tasks.some(task => /^\s*(?:буква\s+)?[А-ЯЁ]\s*[—–:-]/i.test(task.question))) {
+    if (responseBody.tasks.some(task => /^\s*(?:буква\s+)?[А-ЯЁ]\s*[—–:-]/i.test(task.question))) {
       throw new Error("Gemini добавил букву в условие задачи. Выберите героя ещё раз, чтобы сгенерировать задания без подсказки.");
     }
 
     if (requestId !== heroLoadRequest) return;
-    currentTasks = result.tasks;
+    currentTasks = responseBody.tasks;
     if (answerInput) answerInput.disabled = false;
     if (submitButton) submitButton.disabled = false;
     if (hintButton) hintButton.disabled = false;

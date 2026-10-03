@@ -11,6 +11,9 @@ const MAX_BODY_BYTES = 4096;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 20;
 const rateLimits = new Map();
+const TASK_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const taskCache = new Map();
+const pendingTasks = new Map();
 
 const heroes = new Map([
   ["karvat", "КАРВАТ"],
@@ -149,11 +152,6 @@ async function generateTasks(request, response) {
     return;
   }
 
-  if (isRateLimited(clientIp(request))) {
-    sendJson(response, 429, { error: "Слишком много запросов. Попробуйте через минуту." });
-    return;
-  }
-
   let payload;
   try {
     payload = await readJson(request);
@@ -170,6 +168,36 @@ async function generateTasks(request, response) {
     return;
   }
 
+  const cached = taskCache.get(payload.heroId);
+  if (cached && cached.expiresAt > Date.now()) {
+    sendJson(response, 200, { tasks: cached.tasks });
+    return;
+  }
+
+  if (isRateLimited(clientIp(request))) {
+    sendJson(response, 429, { error: "Слишком много запросов. Попробуйте через минуту." });
+    return;
+  }
+
+  let taskRequest = pendingTasks.get(payload.heroId);
+  if (!taskRequest) {
+    taskRequest = generateTasksForHero(payload.heroId, name)
+      .then(tasks => {
+        taskCache.set(payload.heroId, { tasks, expiresAt: Date.now() + TASK_CACHE_TTL_MS });
+        return tasks;
+      })
+      .finally(() => pendingTasks.delete(payload.heroId));
+    pendingTasks.set(payload.heroId, taskRequest);
+  }
+
+  try {
+    sendJson(response, 200, { tasks: await taskRequest });
+  } catch (error) {
+    sendJson(response, 502, { error: error.message });
+  }
+}
+
+async function generateTasksForHero(heroId, name) {
   const prompt = `Составь ровно ${name.length} разных математических заданий для школьника 5 класса на выполнение арифметических действий с натуральными числами. Не используй фамилии, имена, буквы алфавита или пояснения о том, какая буква откроется. Не добавляй к заданиям названия тем или метки вроде «Д — Делимость» и «Буква Д». Каждое условие должно сразу начинаться с самостоятельной математической задачи, без буквенных заголовков и подсказок, связанных с буквами. Ответ — короткое однозначное натуральное число; проверь вычисления. Для каждой задачи дай краткую наводящую подсказку, не сообщающую ответ напрямую. Верни только JSON без Markdown в формате {"tasks":[{"question":"условие","answer":"ответ","hint":"подсказка"}]}.`;
 
   let geminiResponse;
@@ -190,30 +218,33 @@ async function generateTasks(request, response) {
     });
   } catch (error) {
     console.error("Gemini request failed:", error.message);
-    sendJson(response, 502, { error: "Не удалось связаться с Gemini API. Попробуйте позже." });
-    return;
+    throw new Error("Не удалось связаться с Gemini API. Попробуйте позже.");
   }
 
   let interaction;
   try {
     interaction = await geminiResponse.json();
   } catch {
-    sendJson(response, 502, { error: "Gemini API вернул некорректный ответ." });
-    return;
+    throw new Error("Gemini API вернул некорректный ответ.");
   }
 
   if (!geminiResponse.ok) {
-    const message = interaction.error?.message || `Gemini API: HTTP ${geminiResponse.status}`;
-    console.error("Gemini API error:", geminiResponse.status, message);
-    sendJson(response, 502, { error: "Ошибка Gemini API. Проверьте ключ и настройки модели на сервере." });
-    return;
+    const details = interaction.error?.message || `HTTP ${geminiResponse.status}`;
+    console.error("Gemini API error:", geminiResponse.status, details);
+    if (geminiResponse.status === 401 || geminiResponse.status === 403) {
+      throw new Error("Gemini отклонил API-ключ. Проверьте GEMINI_API_KEY в Render Environment.");
+    }
+    if (geminiResponse.status === 429) {
+      throw new Error("Исчерпан лимит Gemini API. Проверьте квоту Google AI Studio и повторите позже.");
+    }
+    throw new Error(`Ошибка Gemini API (HTTP ${geminiResponse.status}). Проверьте логи Render.`);
   }
 
   try {
-    sendJson(response, 200, { tasks: parseTasks(extractText(interaction), name.length) });
+    return parseTasks(extractText(interaction), name.length);
   } catch (error) {
-    console.error("Invalid Gemini response:", error.message);
-    sendJson(response, 502, { error: "Gemini вернул некорректный набор заданий. Повторите попытку." });
+    console.error(`Invalid Gemini response for ${heroId}:`, error.message);
+    throw new Error("Gemini вернул некорректный набор заданий. Повторите попытку.");
   }
 }
 

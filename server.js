@@ -9,7 +9,8 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const DEFAULT_MODELS = [
   "gemini-3.8-flash",
   "gemini-3.5-flash",
-  "gemini-2.5-flash"
+  "gemini-2.0-flash",
+  "gemini-1.5-flash"
 ];
 
 const MODELS = process.env.GEMINI_MODEL
@@ -52,6 +53,8 @@ const mimeTypes = {
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon"
 };
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 function sendJson(response, status, data) {
   const body = JSON.stringify(data);
@@ -129,7 +132,8 @@ function extractText(interaction) {
 }
 
 function parseTasks(text, count) {
-  const result = JSON.parse(text);
+  const cleanedText = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  const result = JSON.parse(cleanedText);
   if (!Array.isArray(result.tasks) || result.tasks.length !== count) {
     throw new Error(`Gemini должен вернуть ровно ${count} заданий.`);
   }
@@ -210,52 +214,62 @@ async function generateTasks(request, response) {
 async function generateTasksForHero(heroId, name) {
   const prompt = `Составь ровно ${name.length} разных математических заданий для школьника 5 класса на выполнение арифметических действий с натуральными числами. Не используй фамилии, имена, буквы алфавита или пояснения о том, какая буква откроется. Не добавляй к заданиям названия тем или метки вроде «Д — Делимость» и «Буква Д». Каждое условие должно сразу начинаться с самостоятельной математической задачи, без буквенных заголовков и подсказок, связанных с буквами. Ответ — короткое однозначное натуральное число; проверь вычисления. Для каждой задачи дай краткую наводящую подсказку, не сообщающую ответ напрямую. Верни только JSON без Markdown в формате {"tasks":[{"question":"условие","answer":"ответ","hint":"подсказка"}]}.`;
 
-  let lastError = null;
+  const MAX_RETRIES = 3;
 
   for (const model of MODELS) {
-    try {
-      const geminiResponse = await fetch(GEMINI_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": GEMINI_API_KEY
-        },
-        body: JSON.stringify({
-          model: model,
-          input: prompt,
-          store: false,
-          generation_config: { thinking_level: "low" }
-        }),
-        signal: AbortSignal.timeout(60_000)
-      });
-
-      let interaction;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
-        interaction = await geminiResponse.json();
-      } catch {
-        throw new Error(`Модель ${model}: вернула некорректный HTTP/JSON ответ.`);
-      }
+        const geminiResponse = await fetch(GEMINI_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": GEMINI_API_KEY
+          },
+          body: JSON.stringify({
+            model: model,
+            input: prompt,
+            store: false,
+            generation_config: { thinking_level: "low" }
+          }),
+          signal: AbortSignal.timeout(60_000)
+        });
 
-      if (!geminiResponse.ok) {
-        const details = interaction.error?.message || `HTTP ${geminiResponse.status}`;
-        if (geminiResponse.status === 401 || geminiResponse.status === 403) {
-          // Если API-ключ невалиден, перебор моделей не поможет
-          throw new Error("Gemini отклонил API-ключ. Проверьте GEMINI_API_KEY.");
+        let interaction;
+        try {
+          interaction = await geminiResponse.json();
+        } catch {
+          throw new Error(`Модель ${model}: вернула некорректный HTTP/JSON ответ.`);
         }
-        throw new Error(`Модель ${model} завершилась с ошибкой HTTP ${geminiResponse.status}: ${details}`);
-      }
 
-      const tasksText = extractText(interaction);
-      const tasks = parseTasks(tasksText, name.length);
+        if (!geminiResponse.ok) {
+          const details = interaction.error?.message || `HTTP ${geminiResponse.status}`;
+          if (geminiResponse.status === 401 || geminiResponse.status === 403) {
+            throw new Error("Gemini отклонил API-ключ. Проверьте GEMINI_API_KEY.");
+          }
 
-      return tasks;
+          if ((geminiResponse.status === 503 || geminiResponse.status === 429 || geminiResponse.status >= 500) && attempt < MAX_RETRIES) {
+            const delayMs = attempt * 1500;
+            console.warn(`[${model}] Временная ошибка HTTP ${geminiResponse.status}. Повтор (${attempt}/${MAX_RETRIES}) через ${delayMs}мс...`);
+            await sleep(delayMs);
+            continue;
+          }
 
-    } catch (error) {
-      console.warn(`Ошибка при работе с моделью ${model}: ${error.message}`);
-      lastError = error;
-      
-      if (error.message.includes("GEMINI_API_KEY")) {
-        throw error;
+          throw new Error(`Модель ${model} завершилась с ошибкой HTTP ${geminiResponse.status}: ${details}`);
+        }
+
+        const tasksText = extractText(interaction);
+        const tasks = parseTasks(tasksText, name.length);
+
+        return tasks;
+
+      } catch (error) {
+        if (error.message.includes("GEMINI_API_KEY")) {
+          throw error;
+        }
+
+        if (attempt === MAX_RETRIES) {
+          console.warn(`Ошибка при работе с моделью ${model} после ${MAX_RETRIES} попыток: ${error.message}`);
+        }
       }
     }
   }
@@ -314,9 +328,8 @@ const server = http.createServer((request, response) => {
   response.end("Method not allowed");
 });
 
-
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || "https://hero-project-ce4p.onrender.com";
-const PING_INTERVAL_MS = 10 * 60 * 1000; // 10 минут
+const PING_INTERVAL_MS = 10 * 60 * 1000;
 
 function startSelfPing() {
   setInterval(() => {
@@ -328,5 +341,5 @@ function startSelfPing() {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Hero quest server listening on port ${PORT}`);
-  startSelfPing(); // <-- Запускаем пинг сразу после старта
+  startSelfPing();
 });

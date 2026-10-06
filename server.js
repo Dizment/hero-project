@@ -4,20 +4,20 @@ const path = require("node:path");
 
 const ROOT = __dirname;
 const PORT = Number(process.env.PORT) || 10000;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY?.trim();
 
 const DEFAULT_MODELS = [
-  "gemini-3.8-flash",
-  "gemini-3.5-flash",
-  "gemini-2.0-flash",
-  "gemini-1.5-flash"
+  "google/gemini-2.5-flash",
+  "google/gemini-2.5-flash-lite",
+  "google/gemini-2.5-pro",
+  "google/gemma-3-27b-it"
 ];
 
-const MODELS = process.env.GEMINI_MODEL
-  ? process.env.GEMINI_MODEL.split(",").map(m => m.trim()).filter(Boolean)
+const MODELS = process.env.GEMINI_MODEL || process.env.OPENROUTER_MODEL
+  ? (process.env.GEMINI_MODEL || process.env.OPENROUTER_MODEL).split(",").map(m => m.trim()).filter(Boolean)
   : DEFAULT_MODELS;
 
-const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const MAX_BODY_BYTES = 4096;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 20;
@@ -116,26 +116,19 @@ function readJson(request) {
   });
 }
 
-function extractText(interaction) {
-  if (typeof interaction.output_text === "string" && interaction.output_text.trim()) {
-    return interaction.output_text;
+function extractText(data) {
+  const content = data.choices?.[0]?.message?.content;
+  if (typeof content === "string" && content.trim()) {
+    return content;
   }
-
-  const parts = (interaction.steps || [])
-    .flatMap(step => Array.isArray(step.content) ? step.content : [])
-    .filter(part => part.type === "text" || part.type === "output_text")
-    .map(part => part.text || "");
-  if (parts.length === 0) {
-    throw new Error("Gemini не вернул текст заданий.");
-  }
-  return parts.join("");
+  throw new Error("OpenRouter не вернул текст заданий.");
 }
 
 function parseTasks(text, count) {
   const cleanedText = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
   const result = JSON.parse(cleanedText);
   if (!Array.isArray(result.tasks) || result.tasks.length !== count) {
-    throw new Error(`Gemini должен вернуть ровно ${count} заданий.`);
+    throw new Error(`Модель должна вернуть ровно ${count} заданий.`);
   }
   for (const task of result.tasks) {
     if (
@@ -147,10 +140,10 @@ function parseTasks(text, count) {
       !task.answer.trim() ||
       !task.hint.trim()
     ) {
-      throw new Error("Gemini вернул задание в неверном формате.");
+      throw new Error("Модель вернула задание в неверном формате.");
     }
     if (/^\s*(?:буква\s+)?[А-ЯЁ]\s*[—–:-]/i.test(task.question)) {
-      throw new Error("Gemini добавил букву в условие задания.");
+      throw new Error("Модель добавила букву в условие задания.");
     }
   }
   return result.tasks.map(({ question, answer, hint }) => ({
@@ -161,8 +154,8 @@ function parseTasks(text, count) {
 }
 
 async function generateTasks(request, response) {
-  if (!GEMINI_API_KEY) {
-    sendJson(response, 503, { error: "Сервер не настроен: добавьте GEMINI_API_KEY в Render Environment." });
+  if (!OPENROUTER_API_KEY) {
+    sendJson(response, 503, { error: "Сервер не настроен: добавьте OPENROUTER_API_KEY в Render Environment." });
     return;
   }
 
@@ -219,51 +212,55 @@ async function generateTasksForHero(heroId, name) {
   for (const model of MODELS) {
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const geminiResponse = await fetch(GEMINI_URL, {
+        const routerResponse = await fetch(OPENROUTER_URL, {
           method: "POST",
           headers: {
+            "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
             "Content-Type": "application/json",
-            "x-goog-api-key": GEMINI_API_KEY
+            "HTTP-Referer": process.env.RENDER_EXTERNAL_URL || "http://localhost",
+            "X-Title": "Hero Quest Server"
           },
           body: JSON.stringify({
             model: model,
-            input: prompt,
-            store: false,
-            generation_config: { thinking_level: "low" }
+            messages: [
+              { role: "user", content: prompt }
+            ],
+            response_format: { type: "json_object" },
+            max_tokens: 1500
           }),
           signal: AbortSignal.timeout(60_000)
         });
 
-        let interaction;
+        let responseData;
         try {
-          interaction = await geminiResponse.json();
+          responseData = await routerResponse.json();
         } catch {
           throw new Error(`Модель ${model}: вернула некорректный HTTP/JSON ответ.`);
         }
 
-        if (!geminiResponse.ok) {
-          const details = interaction.error?.message || `HTTP ${geminiResponse.status}`;
-          if (geminiResponse.status === 401 || geminiResponse.status === 403) {
-            throw new Error("Gemini отклонил API-ключ. Проверьте GEMINI_API_KEY.");
+        if (!routerResponse.ok) {
+          const details = responseData.error?.message || `HTTP ${routerResponse.status}`;
+          if (routerResponse.status === 401 || routerResponse.status === 403) {
+            throw new Error("OpenRouter отклонил API-ключ. Проверьте OPENROUTER_API_KEY.");
           }
 
-          if ((geminiResponse.status === 503 || geminiResponse.status === 429 || geminiResponse.status >= 500) && attempt < MAX_RETRIES) {
+          if ((routerResponse.status === 503 || routerResponse.status === 429 || routerResponse.status >= 500) && attempt < MAX_RETRIES) {
             const delayMs = attempt * 1500;
-            console.warn(`[${model}] Временная ошибка HTTP ${geminiResponse.status}. Повтор (${attempt}/${MAX_RETRIES}) через ${delayMs}мс...`);
+            console.warn(`[${model}] Временная ошибка HTTP ${routerResponse.status}. Повтор (${attempt}/${MAX_RETRIES}) через ${delayMs}мс...`);
             await sleep(delayMs);
             continue;
           }
 
-          throw new Error(`Модель ${model} завершилась с ошибкой HTTP ${geminiResponse.status}: ${details}`);
+          throw new Error(`Модель ${model} завершилась с ошибкой HTTP ${routerResponse.status}: ${details}`);
         }
 
-        const tasksText = extractText(interaction);
+        const tasksText = extractText(responseData);
         const tasks = parseTasks(tasksText, name.length);
 
         return tasks;
 
       } catch (error) {
-        if (error.message.includes("GEMINI_API_KEY")) {
+        if (error.message.includes("OPENROUTER_API_KEY")) {
           throw error;
         }
 
@@ -275,7 +272,7 @@ async function generateTasksForHero(heroId, name) {
   }
 
   console.error(`Все модели из списка [${MODELS.join(", ")}] завершились с ошибками для ${heroId}.`);
-  throw new Error("Не удалось сгенерировать задания ни с одной из доступных моделей Gemini. Повторите попытку позже.");
+  throw new Error("Не удалось сгенерировать задания ни с одной из доступных моделей OpenRouter. Повторите попытку позже.");
 }
 
 function serveStatic(request, response) {

@@ -180,7 +180,7 @@ async function loadHero() {
   const hintBox = document.getElementById("aiHintText");
 
   if (taskStep) taskStep.textContent = "Создание заданий";
-  if (taskQuestion) taskQuestion.textContent = "Gemini подбирает математические примеры...";
+  if (taskQuestion) taskQuestion.textContent = "ИИ подбирает математические примеры...";
   if (feedbackMsg) {
     feedbackMsg.className = "feedback-msg";
     feedbackMsg.textContent = "";
@@ -213,11 +213,11 @@ async function loadHero() {
         typeof task.hint !== "string"
       )
     ) {
-      throw new Error("Gemini вернул задания в неверном формате. Попробуйте выбрать героя ещё раз.");
+      throw new Error("Модель вернула задания в неверном формате. Попробуйте выбрать героя ещё раз.");
     }
 
     if (responseBody.tasks.some(task => /^\s*(?:буква\s+)?[А-ЯЁ]\s*[—–:-]/i.test(task.question))) {
-      throw new Error("Gemini добавил букву в условие задачи. Выберите героя ещё раз, чтобы сгенерировать задания без подсказки.");
+      throw new Error("Модель добавила букву в условие задачи. Выберите героя ещё раз, чтобы сгенерировать задания без подсказки.");
     }
 
     if (requestId !== heroLoadRequest) return;
@@ -229,7 +229,7 @@ async function loadHero() {
   } catch (error) {
     if (requestId !== heroLoadRequest) return;
     if (taskStep) taskStep.textContent = "Не удалось создать задания";
-    if (taskQuestion) taskQuestion.textContent = "Проверьте подключение к интернету и настройки Gemini API.";
+    if (taskQuestion) taskQuestion.textContent = "Проверьте подключение к интернету и настройку API-ключа OpenRouter.";
     if (feedbackMsg) {
       feedbackMsg.className = "feedback-msg incorrect";
       feedbackMsg.textContent = error.message;

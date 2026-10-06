@@ -8,7 +8,8 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 const DEFAULT_MODELS = [
   "gemini-3.8-flash",
-  "gemini-3.5-flash"
+  "gemini-3.5-flash",
+  "gemini-2.5-flash"
 ];
 
 const MODELS = process.env.GEMINI_MODEL

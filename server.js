@@ -5,7 +5,17 @@ const path = require("node:path");
 const ROOT = __dirname;
 const PORT = Number(process.env.PORT) || 10000;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+
+const DEFAULT_MODELS = [
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
+  "gemini-1.5-flash"
+];
+
+const MODELS = process.env.GEMINI_MODEL
+  ? process.env.GEMINI_MODEL.split(",").map(m => m.trim()).filter(Boolean)
+  : DEFAULT_MODELS;
+
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
 const MAX_BODY_BYTES = 4096;
 const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -200,52 +210,58 @@ async function generateTasks(request, response) {
 async function generateTasksForHero(heroId, name) {
   const prompt = `Составь ровно ${name.length} разных математических заданий для школьника 5 класса на выполнение арифметических действий с натуральными числами. Не используй фамилии, имена, буквы алфавита или пояснения о том, какая буква откроется. Не добавляй к заданиям названия тем или метки вроде «Д — Делимость» и «Буква Д». Каждое условие должно сразу начинаться с самостоятельной математической задачи, без буквенных заголовков и подсказок, связанных с буквами. Ответ — короткое однозначное натуральное число; проверь вычисления. Для каждой задачи дай краткую наводящую подсказку, не сообщающую ответ напрямую. Верни только JSON без Markdown в формате {"tasks":[{"question":"условие","answer":"ответ","hint":"подсказка"}]}.`;
 
-  let geminiResponse;
-  try {
-    geminiResponse = await fetch(GEMINI_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": GEMINI_API_KEY
-      },
-      body: JSON.stringify({
-        model: GEMINI_MODEL,
-        input: prompt,
-        store: false,
-        generation_config: { thinking_level: "low" }
-      }),
-      signal: AbortSignal.timeout(60_000)
-    });
-  } catch (error) {
-    console.error("Gemini request failed:", error.message);
-    throw new Error("Не удалось связаться с Gemini API. Попробуйте позже.");
-  }
+  let lastError = null;
 
-  let interaction;
-  try {
-    interaction = await geminiResponse.json();
-  } catch {
-    throw new Error("Gemini API вернул некорректный ответ.");
-  }
+  for (const model of MODELS) {
+    try {
+      const geminiResponse = await fetch(GEMINI_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": GEMINI_API_KEY
+        },
+        body: JSON.stringify({
+          model: model,
+          input: prompt,
+          store: false,
+          generation_config: { thinking_level: "low" }
+        }),
+        signal: AbortSignal.timeout(60_000)
+      });
 
-  if (!geminiResponse.ok) {
-    const details = interaction.error?.message || `HTTP ${geminiResponse.status}`;
-    console.error("Gemini API error:", geminiResponse.status, details);
-    if (geminiResponse.status === 401 || geminiResponse.status === 403) {
-      throw new Error("Gemini отклонил API-ключ. Проверьте GEMINI_API_KEY в Render Environment.");
+      let interaction;
+      try {
+        interaction = await geminiResponse.json();
+      } catch {
+        throw new Error(`Модель ${model}: вернула некорректный HTTP/JSON ответ.`);
+      }
+
+      if (!geminiResponse.ok) {
+        const details = interaction.error?.message || `HTTP ${geminiResponse.status}`;
+        if (geminiResponse.status === 401 || geminiResponse.status === 403) {
+          // Если API-ключ невалиден, перебор моделей не поможет
+          throw new Error("Gemini отклонил API-ключ. Проверьте GEMINI_API_KEY.");
+        }
+        throw new Error(`Модель ${model} завершилась с ошибкой HTTP ${geminiResponse.status}: ${details}`);
+      }
+
+      const tasksText = extractText(interaction);
+      const tasks = parseTasks(tasksText, name.length);
+
+      return tasks;
+
+    } catch (error) {
+      console.warn(`Ошибка при работе с моделью ${model}: ${error.message}`);
+      lastError = error;
+      
+      if (error.message.includes("GEMINI_API_KEY")) {
+        throw error;
+      }
     }
-    if (geminiResponse.status === 429) {
-      throw new Error("Исчерпан лимит Gemini API. Проверьте квоту Google AI Studio и повторите позже.");
-    }
-    throw new Error(`Ошибка Gemini API (HTTP ${geminiResponse.status}). Проверьте логи Render.`);
   }
 
-  try {
-    return parseTasks(extractText(interaction), name.length);
-  } catch (error) {
-    console.error(`Invalid Gemini response for ${heroId}:`, error.message);
-    throw new Error("Gemini вернул некорректный набор заданий. Повторите попытку.");
-  }
+  console.error(`Все модели из списка [${MODELS.join(", ")}] завершились с ошибками для ${heroId}.`);
+  throw new Error("Не удалось сгенерировать задания ни с одной из доступных моделей Gemini. Повторите попытку позже.");
 }
 
 function serveStatic(request, response) {

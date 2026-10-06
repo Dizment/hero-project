@@ -314,6 +314,19 @@ const server = http.createServer((request, response) => {
   response.end("Method not allowed");
 });
 
+
+const SELF_URL = process.env.RENDER_EXTERNAL_URL || "https://hero-project-ce4p.onrender.com";
+const PING_INTERVAL_MS = 10 * 60 * 1000; // 10 минут
+
+function startSelfPing() {
+  setInterval(() => {
+    fetch(SELF_URL)
+      .then(res => console.log(`[Self-Ping] Статус: ${res.status} (${new Date().toLocaleTimeString()})`))
+      .catch(err => console.warn(`[Self-Ping] Ошибка: ${err.message}`));
+  }, PING_INTERVAL_MS);
+}
+
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Hero quest server listening on port ${PORT}`);
+  startSelfPing(); // <-- Запускаем пинг сразу после старта
 });
